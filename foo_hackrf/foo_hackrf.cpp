@@ -9,17 +9,17 @@
 
 #define BUF_LEN 262144         //hackrf tx buf
 #define BUF_NUM   15
-#define BUFFER_SIZE 2048
+#define BUFFER_SIZE 14400
 #define BYTES_PER_SAMPLE  2
 #define M_PI 3.14159265358979323846
 #define HACKRF_SAMPLE 400000  //0.4Mhz
-#define AUDIO_OUT_BUF_LEN (HACKRF_SAMPLE/8000*BUFFER_SIZE)   //PCM minimum 8000Hz
+#define AUDIO_OUT_BUF_LEN (HACKRF_SAMPLE/22050*BUFFER_SIZE)   //PCM minimum 22050Hz
 
 
 
 DECLARE_COMPONENT_VERSION(
 "HackRF Transmitter", 
-"0.0.1 alpha 2", 
+"0.0.2", 
 "Source Code:https://github.com/jocover/foo_hackrf \n"
 "DLL:https://github.com/jocover/foo_hackrf/blob/master/Release/foo_hackrf.dll \n");
 
@@ -205,12 +205,12 @@ public:
 
 		}
 
-		//				if (debug) {
-		//					str.Format(_T("in %d out:%d"), m_sample_count, out_count);
-		//					MessageBox(NULL, str, L"Debug", MB_OK);
-		//					debug = false;
-		//				}
-
+						//if (debug) {
+						//	str.Format(_T("in %d out:%d"), m_sample_count, out_count);
+						//	MessageBox(NULL, str, L"Debug", MB_OK);
+						//	debug = false;
+						//}
+		if(running){
 	//		Resample to 200000Mhz
 		soxr_oneshot(m_sample_rate, HACKRF_SAMPLE, 1,
 			audio_buf, m_sample_count, NULL,
@@ -235,7 +235,7 @@ public:
 
 		work(audio_IQ_buf, out_count * BYTES_PER_SAMPLE);
 
-
+		}
 		// To retrieve the currently processed track, use get_cur_file().
 		// Warning: the track is not always known - it's up to the calling component to provide this data and in some situations we'll be working with data that doesn't originate from an audio file.
 		// If you rely on get_cur_file(), you should change need_track_change_mark() to return true to get accurate information when advancing between tracks.
@@ -313,7 +313,7 @@ private:
 	uint32_t ch_mask;
 
 	CString str;
-	BOOL debug = false;;
+	BOOL debug = true;;
 
 	config conf;
 	int8_t ** _buf;
