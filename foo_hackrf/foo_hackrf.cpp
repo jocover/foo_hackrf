@@ -19,7 +19,7 @@
 
 DECLARE_COMPONENT_VERSION(
 "HackRF Transmitter", 
-"0.0.2", 
+"0.0.3", 
 "Source Code:https://github.com/jocover/foo_hackrf \n"
 "DLL:https://github.com/jocover/foo_hackrf/blob/master/Release/foo_hackrf.dll \n");
 
@@ -30,7 +30,7 @@ VALIDATE_COMPONENT_FILENAME("foo_hackrf.dll");
 
 struct config {
 	double freq;
-	double fm_gain;
+	uint32_t gain;
 	uint32_t mode;
 	uint32_t tx_vga;
 	uint32_t enableamp;
@@ -38,8 +38,8 @@ struct config {
 };
 static config default{
 		433.00,//433Mhz
-		90.0,
-		0,//WBFM mode
+		90,
+		0,//mode WBFM=0 NBFM=1 AM=2
 		40,
 		1};
 
@@ -67,8 +67,6 @@ public:
 		ReleaseMutex(m_hMutex);
 		return 0;
 	}
-
-
 
 	void work(float *input_items, uint32_t len) {
 		WaitForSingleObject(m_hMutex, INFINITE);
@@ -101,7 +99,7 @@ public:
 	dsp_sample(dsp_preset const & in) : conf(default) {
 		parse_preset(conf, in);
 		freq = uint64_t(conf.freq * 1000000);
-		fm_gain = (float)conf.fm_gain;
+		gain = (float)(conf.gain/100.0);
 		mode = conf.mode;
 		tx_vga = conf.tx_vga;
 		enableamp = conf.enableamp;
@@ -126,8 +124,6 @@ public:
 				_buf[i] = (int8_t *)malloc(BUF_LEN*sizeof(int8_t));
 			}
 		}
-
-
 		// hackrf init  //
 
 		hackrf_init();
@@ -211,15 +207,22 @@ public:
 						//	debug = false;
 						//}
 		if(running){
-	//		Resample to 200000Mhz
+	//		Resample to 400000hz
 		soxr_oneshot(m_sample_rate, HACKRF_SAMPLE, 1,
 			audio_buf, m_sample_count, NULL,
 			new_audio_sample, out_count, NULL,
 			NULL, NULL, NULL);
+		//AM mode
+		if (mode == 2) {
+			for (uint32_t i = 0; i < out_count; i++) {			
+				audio_IQ_buf[i*2] = new_audio_sample[i]* gain;
+				audio_IQ_buf[i * 2 + 1] = 0;
+			}
+		}else{
 
 		for (uint32_t i = 0; i < out_count; i++) {
 
-			double	audio_amp = new_audio_sample[i] * (fm_gain / 100.0);
+			double	audio_amp = new_audio_sample[i] * gain;
 
 			if (fabs(audio_amp) > 1.0) {
 				audio_amp = (audio_amp > 0.0) ? 1.0 : -1.0;
@@ -231,6 +234,7 @@ public:
 				fm_phase += (float)(2.0 * M_PI);
 			audio_IQ_buf[i * BYTES_PER_SAMPLE] = (float)sin(fm_phase);
 			audio_IQ_buf[i * BYTES_PER_SAMPLE + 1] = (float)cos(fm_phase);
+		}
 		}
 
 		work(audio_IQ_buf, out_count * BYTES_PER_SAMPLE);
@@ -282,7 +286,7 @@ public:
 	static bool g_have_config_popup() { return true; }
 	static void make_preset(config conf, dsp_preset & out) {
 		dsp_preset_builder builder;
-		builder << conf.freq << conf.fm_gain << conf.mode << conf.tx_vga << conf.enableamp;
+		builder << conf.freq << conf.gain << conf.mode << conf.tx_vga << conf.enableamp;
 		builder.finish(g_get_guid(), out);
 	}
 
@@ -291,7 +295,7 @@ public:
 
 		try {
 			dsp_preset_parser parser(in);
-			parser >> conf.freq >> conf.fm_gain >> conf.mode >> conf.tx_vga >> conf.enableamp;
+			parser >> conf.freq >> conf.gain >> conf.mode >> conf.tx_vga >> conf.enableamp;
 		}
 		catch (exception_io_data) { conf = default; }
 	}
@@ -302,7 +306,7 @@ private:
 	hackrf_device * _dev;
 	int ret;
 	uint64_t freq;
-	float fm_gain;
+	float gain;
 	uint32_t mode;
 	uint32_t tx_vga;
 	uint8_t enableamp;
@@ -344,9 +348,9 @@ public:
 
 	enum { IDD = IDD_DSP };
 	enum {
-		RangeMin = 0,
-		RangeMax = 100,
-		RangeTotal = RangeMax - RangeMin,
+		GainMin = 0,
+		GainMax = 100,
+		GainTotal = GainMax - GainMin,
 		TXGainMin = 0,
 		TXGainMax = 47,
 		TxGainTotal = TXGainMax - TXGainMin
@@ -367,12 +371,12 @@ private:
 		m_edit_freq = GetDlgItem(IDC_EDIT_FREQ);
 		m_check_amp = GetDlgItem(IDC_CHECK_AMP);
 		m_combo_mode = GetDlgItem(IDC_COMBO_MODE);
-		m_slider.SetRange(0, RangeTotal);
+		m_slider.SetRange(0, GainTotal);
 		m_slider_tx.SetRange(0, TxGainTotal);
 
 		{
 			dsp_sample::parse_preset(_config, m_initData);
-			m_slider.SetPos(pfc::clip_t<t_int32>(pfc::rint32(_config.fm_gain), RangeMin, RangeMax) - RangeMin);
+			m_slider.SetPos(pfc::clip_t<t_int32>(pfc::rint32(_config.gain), GainMin, GainMax) - GainMin);
 			m_slider_tx.SetPos(pfc::clip_t<t_int32>(pfc::rint32(_config.tx_vga), TXGainMin, TXGainMax) - TXGainMin);
 
 			m_edit_freq.SetLimitText(7);
@@ -385,9 +389,10 @@ private:
 
 			m_combo_mode.AddString(L"WBFM");
 			m_combo_mode.AddString(L"NBFM");
+			m_combo_mode.AddString(L"AM");
 			m_combo_mode.SetCurSel(_config.mode);
 
-			RefreshLabel((uint32_t)_config.fm_gain);
+			RefreshLabel((uint32_t)_config.gain);
 			RefreshTXLabel(_config.tx_vga);
 			conf = _config;
 		}
@@ -402,9 +407,8 @@ private:
 			conf.freq = atof(freqstr.c_str());
 			conf.mode = m_combo_mode.GetCurSel();
 			conf.enableamp = m_check_amp.GetCheck();
-			conf.fm_gain = (float)(m_slider.GetPos() + RangeMin);
-			conf.tx_vga = (uint32_t)(m_slider_tx.GetPos() + RangeMin);
-
+			conf.gain = (uint32_t)m_slider.GetPos();
+			conf.tx_vga = (uint32_t)m_slider_tx.GetPos();
 			{
 				dsp_preset_impl preset;
 				dsp_sample::make_preset(conf, preset);
@@ -424,14 +428,10 @@ private:
 
 	void OnHScroll(UINT nSBCode, UINT nPos, CScrollBar pScrollBar) {
 
-		conf.fm_gain = (float)(m_slider.GetPos() + RangeMin);
-		conf.tx_vga = (uint32_t)(m_slider_tx.GetPos() + RangeMin);
-		{
-			dsp_preset_impl preset;
-			dsp_sample::make_preset(conf, preset);
-			m_callback.on_preset_changed(preset);
-		}
-		RefreshLabel((uint32_t)conf.fm_gain);
+		conf.gain = (uint32_t)m_slider.GetPos();
+		conf.tx_vga = (uint32_t)m_slider_tx.GetPos() ;
+
+		RefreshLabel((uint32_t)conf.gain);
 		RefreshTXLabel(conf.tx_vga);
 	}
 
