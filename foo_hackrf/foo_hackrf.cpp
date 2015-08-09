@@ -387,7 +387,6 @@ private:
 			m_combo_mode.AddString(L"NBFM");
 			m_combo_mode.SetCurSel(_config.mode);
 
-			RefreshFreqLabel(_config.freq);
 			RefreshLabel((uint32_t)_config.fm_gain);
 			RefreshTXLabel(_config.tx_vga);
 			conf = _config;
@@ -401,7 +400,6 @@ private:
 		case IDOK: {
 			pfc::string freqstr = ::uGetDlgItemText(*this, IDC_EDIT_FREQ);
 			conf.freq = atof(freqstr.c_str());
-			RefreshFreqLabel(conf.freq);
 			conf.mode = m_combo_mode.GetCurSel();
 			conf.enableamp = m_check_amp.GetCheck();
 			conf.fm_gain = (float)(m_slider.GetPos() + RangeMin);
@@ -437,14 +435,6 @@ private:
 		RefreshTXLabel(conf.tx_vga);
 	}
 
-
-	void RefreshFreqLabel(double val) {
-		char freq[20];
-		sprintf_s(freq, "%.2f", val);
-		pfc::string_formatter msg; msg << "Freq:" << freq << " Mhz";
-		::uSetDlgItemText(*this, IDC_SLIDER_FREQ_LABEL, msg);
-
-	}
 
 	void RefreshTXLabel(uint32_t val) {
 		pfc::string_formatter msg; msg << pfc::format_int(val);
