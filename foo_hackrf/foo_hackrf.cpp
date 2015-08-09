@@ -5,7 +5,6 @@
 #include "soxr.h" //http://sourceforge.net/projects/soxr/
 #include <stdlib.h>
 #include <math.h>
-#include <complex>
 #include <stdio.h>
 
 #define BUF_LEN 262144         //hackrf tx buf
@@ -21,7 +20,7 @@
 DECLARE_COMPONENT_VERSION(
 "HackRF Transmitter", 
 "0.0.1 alpha 2", 
-"SourceCode:https://github.com/jocover/foo_hackrf \n"
+"Source Code:https://github.com/jocover/foo_hackrf \n"
 "DLL:https://github.com/jocover/foo_hackrf/blob/master/Release/foo_hackrf.dll \n");
 
 
@@ -129,7 +128,7 @@ public:
 		}
 
 
-		// hackrf init TODO RunDSPConfigPopup crash //
+		// hackrf init  //
 
 		hackrf_init();
 		ret = hackrf_open(&_dev);
