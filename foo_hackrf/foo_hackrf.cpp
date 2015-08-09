@@ -20,7 +20,7 @@
 
 DECLARE_COMPONENT_VERSION(
 "HackRF Transmitter", 
-"0.0.1 alpha 1", 
+"0.0.1 alpha 2", 
 "SourceCode:https://github.com/jocover/foo_hackrf \n"
 "DLL:https://github.com/jocover/foo_hackrf/blob/master/Release/foo_hackrf.dll \n");
 
@@ -38,7 +38,7 @@ struct config {
 
 };
 static config default{
-	433.00,//433Mhz
+		433.00,//433Mhz
 		90.0,
 		0,//WBFM mode
 		40,
@@ -76,14 +76,14 @@ public:
 		int8_t * buf = (int8_t *)_buf[head] + offset;
 		if (len < samp_avail) {
 			for (uint32_t i = 0; i < len; i++) {
-				buf[i] = (int8_t)(input_items[i] * 128.0);
+				buf[i] = (int8_t)(input_items[i] * 127.0);
 			}
 			offset += len;
 			samp_avail -= len;
 		}
 		else {
 			for (uint32_t i = 0; i < samp_avail; i++) {
-				buf[i] = (int8_t)(input_items[i] * 128.0);
+				buf[i] = (int8_t)(input_items[i] * 127.0);
 			}
 			head = (head + 1) % BUF_NUM;
 			count++;
@@ -91,7 +91,7 @@ public:
 			buf = (int8_t*)_buf[head];
 			int remaining = len - samp_avail;
 			for (int32_t i = 0; i < remaining; i++) {
-				buf[i] = (int8_t)(input_items[i] * 128.0);
+				buf[i] = (int8_t)(input_items[i] * 127.0);
 			}
 			offset = remaining;
 			samp_avail = BUF_LEN - remaining;
@@ -180,7 +180,7 @@ public:
 		return guid;
 	}
 
-	static void g_get_name(pfc::string_base & p_out) { p_out = "HackRF FM Transmitter"; }
+	static void g_get_name(pfc::string_base & p_out) { p_out = "HackRF Transmitter"; }
 
 	bool on_chunk(audio_chunk * chunk, abort_callback &) {
 		// Perform any operations on the chunk here.
