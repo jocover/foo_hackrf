@@ -9,17 +9,13 @@
 
 #define BUF_LEN 262144         //hackrf tx buf
 #define BUF_NUM   15
-#define BUFFER_SIZE 14400
 #define BYTES_PER_SAMPLE  2
 #define M_PI 3.14159265358979323846
 #define HACKRF_SAMPLE 400000  //0.4Mhz
-#define AUDIO_OUT_BUF_LEN (HACKRF_SAMPLE/22050*BUFFER_SIZE)   //PCM minimum 22050Hz
-
-
 
 DECLARE_COMPONENT_VERSION(
-"HackRF Transmitter", 
-"0.0.3", 
+"HackRF Transmitter",
+"0.0.4",
 "Source Code:https://github.com/jocover/foo_hackrf \n"
 "DLL:https://github.com/jocover/foo_hackrf/blob/master/Release/foo_hackrf.dll \n");
 
@@ -37,7 +33,7 @@ struct config {
 
 };
 static config default{
-		433.00,//433Mhz
+	433.00,//433Mhz
 		90,
 		0,//mode WBFM=0 NBFM=1 AM=2
 		40,
@@ -99,15 +95,13 @@ public:
 	dsp_sample(dsp_preset const & in) : conf(default) {
 		parse_preset(conf, in);
 		freq = uint64_t(conf.freq * 1000000);
-		gain = (float)(conf.gain/100.0);
+		gain = (float)(conf.gain / 100.0);
 		mode = conf.mode;
 		tx_vga = conf.tx_vga;
 		enableamp = conf.enableamp;
 
 		m_hMutex = CreateMutex(NULL, NULL, NULL);
-		audio_buf = new float[BUFFER_SIZE];
-		new_audio_sample = new float[AUDIO_OUT_BUF_LEN];
-		audio_IQ_buf = new float[AUDIO_OUT_BUF_LEN * 2];
+
 		if (mode == 0) {
 			fm_deviation = 2.0 * M_PI * 75.0e3 / HACKRF_SAMPLE; // 75 kHz max deviation WBFM
 		}
@@ -161,7 +155,7 @@ public:
 			free(_buf);
 		}
 
-		delete audio_IQ_buf;
+		delete IQ_buf;
 		delete new_audio_sample;
 		delete audio_buf;
 		running = false;
@@ -187,6 +181,25 @@ public:
 		uint32_t out_count = (uint32_t)m_sample_count*HACKRF_SAMPLE / m_sample_rate;
 		audio_sample * source_audio_buf = chunk->get_data();
 
+		//if (debug) {
+		//	CString str;
+		//	str.Format(_T("in %d out:%d"), m_sample_count, out_count);
+		//	MessageBox(NULL, str, L"Debug", MB_OK);
+		//	debug = false;
+		//}
+
+		if (audio_buf == NULL) {
+			audio_buf = new float[m_sample_rate]();
+		}
+
+		if (new_audio_sample == NULL) {
+			new_audio_sample = new float[out_count]();
+		}
+
+		if (IQ_buf == NULL) {
+			IQ_buf = new float[out_count * 2]();
+		}
+
 		if (nch == 1 && ch_mask == audio_chunk::channel_config_mono) {
 			for (uint32_t i = 0; i < m_sample_count; i++) {
 
@@ -201,44 +214,59 @@ public:
 
 		}
 
-						//if (debug) {
-						//	str.Format(_T("in %d out:%d"), m_sample_count, out_count);
-						//	MessageBox(NULL, str, L"Debug", MB_OK);
-						//	debug = false;
-						//}
-		if(running){
-	//		Resample to 400000hz
-		soxr_oneshot(m_sample_rate, HACKRF_SAMPLE, 1,
-			audio_buf, m_sample_count, NULL,
-			new_audio_sample, out_count, NULL,
-			NULL, NULL, NULL);
-		//AM mode
-		if (mode == 2) {
-			for (uint32_t i = 0; i < out_count; i++) {			
-				audio_IQ_buf[i*2] = new_audio_sample[i]* gain;
-				audio_IQ_buf[i * 2 + 1] = 0;
+		if (running) {
+			//		Resample to 400000hz
+			soxr_oneshot(m_sample_rate, HACKRF_SAMPLE, 1,
+				audio_buf, m_sample_count, NULL,
+				new_audio_sample, out_count, NULL,
+				NULL, NULL, NULL);
+
+			//AM mode
+			if (mode == 2) {
+				for (uint32_t i = 0; i < out_count; i++) {
+					double	audio_amp = new_audio_sample[i] * gain;
+
+					if (fabs(audio_amp) > 1.0) {
+						audio_amp = (audio_amp > 0.0) ? 1.0 : -1.0;
+					}
+
+					IQ_buf[i * BYTES_PER_SAMPLE] = (float)audio_amp;
+					IQ_buf[i * BYTES_PER_SAMPLE + 1] = 0;
+				}
 			}
-		}else{
+			//FM mode
+			else {
 
-		for (uint32_t i = 0; i < out_count; i++) {
+				for (uint32_t i = 0; i < out_count; i++) {
 
-			double	audio_amp = new_audio_sample[i] * gain;
+					double	audio_amp = new_audio_sample[i] * gain;
 
-			if (fabs(audio_amp) > 1.0) {
-				audio_amp = (audio_amp > 0.0) ? 1.0 : -1.0;
+					if (fabs(audio_amp) > 1.0) {
+						audio_amp = (audio_amp > 0.0) ? 1.0 : -1.0;
+					}
+					fm_phase += fm_deviation * audio_amp;
+					while (fm_phase > (float)(M_PI))
+						fm_phase -= (float)(2.0 * M_PI);
+					while (fm_phase < (float)(-M_PI))
+						fm_phase += (float)(2.0 * M_PI);
+
+					IQ_buf[i * BYTES_PER_SAMPLE] = (float)sin(fm_phase);
+					IQ_buf[i * BYTES_PER_SAMPLE + 1] = (float)cos(fm_phase);
+				}
 			}
-			fm_phase += fm_deviation * audio_amp;
-			while (fm_phase > (float)(M_PI))
-				fm_phase -= (float)(2.0 * M_PI);
-			while (fm_phase < (float)(-M_PI))
-				fm_phase += (float)(2.0 * M_PI);
-			audio_IQ_buf[i * BYTES_PER_SAMPLE] = (float)sin(fm_phase);
-			audio_IQ_buf[i * BYTES_PER_SAMPLE + 1] = (float)cos(fm_phase);
-		}
-		}
+			if (out_count > BUF_LEN) {
+				int remaining = out_count * 2;
+				for (uint32_t i = 0; i < (out_count * 2); i += BUF_LEN) {
 
-		work(audio_IQ_buf, out_count * BYTES_PER_SAMPLE);
+					work(IQ_buf + i, (remaining > BUF_LEN) ? BUF_LEN : remaining);
+					remaining -= BUF_LEN;
+				}
 
+			}
+			else {
+
+				work(IQ_buf, out_count * BYTES_PER_SAMPLE);
+			}
 		}
 		// To retrieve the currently processed track, use get_cur_file().
 		// Warning: the track is not always known - it's up to the calling component to provide this data and in some situations we'll be working with data that doesn't originate from an audio file.
@@ -277,7 +305,9 @@ public:
 		return true;
 	}
 	static void g_show_config_popup(const dsp_preset & p_data, HWND p_parent, dsp_preset_edit_callback & p_callback) {
-		if (running) { MessageBox(NULL, L"Must Stop Playing", NULL, MB_OK); }
+		if (running) {
+			MessageBox(NULL, L"Must Stop Playing", NULL, MB_OK);
+		}
 		else {
 			::RunDSPConfigPopup(p_data, p_parent, p_callback);
 		}
@@ -316,7 +346,6 @@ private:
 	uint32_t nch;
 	uint32_t ch_mask;
 
-	CString str;
 	BOOL debug = true;;
 
 	config conf;
@@ -327,11 +356,11 @@ private:
 	int offset;
 	uint32_t samp_avail;
 
-	float * audio_buf;
-	float * audio_IQ_buf;
-	float * new_audio_sample;
-	double fm_phase;
-	double fm_deviation;
+	float * audio_buf = NULL;
+	float * IQ_buf = NULL;
+	float * new_audio_sample = NULL;
+	double fm_phase= NULL;
+	double fm_deviation= NULL;
 };
 
 int _hackrf_tx_callback(hackrf_transfer *transfer) {
@@ -429,7 +458,7 @@ private:
 	void OnHScroll(UINT nSBCode, UINT nPos, CScrollBar pScrollBar) {
 
 		conf.gain = (uint32_t)m_slider.GetPos();
-		conf.tx_vga = (uint32_t)m_slider_tx.GetPos() ;
+		conf.tx_vga = (uint32_t)m_slider_tx.GetPos();
 
 		RefreshLabel((uint32_t)conf.gain);
 		RefreshTXLabel(conf.tx_vga);
