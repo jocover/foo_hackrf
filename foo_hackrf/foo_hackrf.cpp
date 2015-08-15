@@ -6,12 +6,14 @@
 #include <stdlib.h>
 #include <math.h>
 #include <stdio.h>
+#include <mutex> 
 
+#define HACKRF_SAMPLE 400000  //0.4Mhz
 #define BUF_LEN 262144         //hackrf tx buf
-#define BUF_NUM   15
+#define BUF_NUM  15
 #define BYTES_PER_SAMPLE  2
 #define M_PI 3.14159265358979323846
-#define HACKRF_SAMPLE 400000  //0.4Mhz
+
 
 DECLARE_COMPONENT_VERSION(
 "HackRF Transmitter",
@@ -51,7 +53,8 @@ public:
 
 	int hackrf_tx_callback(int8_t *buffer, uint32_t length) {
 
-		WaitForSingleObject(m_hMutex, INFINITE);
+		m_mutex.lock();
+
 		if (count == 0) {
 			memset(buffer, 0, length);
 		}
@@ -60,12 +63,16 @@ public:
 			tail = (tail + 1) % BUF_NUM;
 			count--;
 		}
-		ReleaseMutex(m_hMutex);
+		m_mutex.unlock();
+
 		return 0;
 	}
 
+
 	void work(float *input_items, uint32_t len) {
-		WaitForSingleObject(m_hMutex, INFINITE);
+
+		m_mutex.lock();
+
 		int8_t * buf = (int8_t *)_buf[head] + offset;
 		if (len < samp_avail) {
 			for (uint32_t i = 0; i < len; i++) {
@@ -89,7 +96,8 @@ public:
 			offset = remaining;
 			samp_avail = BUF_LEN - remaining;
 		}
-		ReleaseMutex(m_hMutex);
+		m_mutex.unlock();
+
 	}
 
 	dsp_sample(dsp_preset const & in) : conf(default) {
@@ -99,8 +107,6 @@ public:
 		mode = conf.mode;
 		tx_vga = conf.tx_vga;
 		enableamp = conf.enableamp;
-
-		m_hMutex = CreateMutex(NULL, NULL, NULL);
 
 		if (mode == 0) {
 			fm_deviation = 2.0 * M_PI * 75.0e3 / HACKRF_SAMPLE; // 75 kHz max deviation WBFM
@@ -155,8 +161,10 @@ public:
 			free(_buf);
 		}
 
+		soxr_delete(soxr);
+
 		delete IQ_buf;
-		delete new_audio_sample;
+		delete new_audio_buf;
 		delete audio_buf;
 		running = false;
 	}
@@ -181,23 +189,22 @@ public:
 		uint32_t out_count = (uint32_t)m_sample_count*HACKRF_SAMPLE / m_sample_rate;
 		audio_sample * source_audio_buf = chunk->get_data();
 
-		//if (debug) {
-		//	CString str;
-		//	str.Format(_T("in %d out:%d"), m_sample_count, out_count);
-		//	MessageBox(NULL, str, L"Debug", MB_OK);
-		//	debug = false;
-		//}
-
 		if (audio_buf == NULL) {
-			audio_buf = new float[m_sample_rate]();
+			audio_buf = new float[m_sample_count]();
 		}
 
-		if (new_audio_sample == NULL) {
-			new_audio_sample = new float[out_count]();
+		if (new_audio_buf == NULL) {
+			new_audio_buf = new float[out_count]();
 		}
 
 		if (IQ_buf == NULL) {
 			IQ_buf = new float[out_count * 2]();
+		}
+
+		if (soxr == NULL) {
+			soxr_quality_spec_t q_spec = soxr_quality_spec(SOXR_HQ, 0);
+			soxr_runtime_spec_t r_spec = soxr_runtime_spec(0);
+			soxr = soxr_create(m_sample_rate, HACKRF_SAMPLE, 1, NULL, NULL, &q_spec, &r_spec);
 		}
 
 		if (nch == 1 && ch_mask == audio_chunk::channel_config_mono) {
@@ -215,16 +222,13 @@ public:
 		}
 
 		if (running) {
-			//		Resample to 400000hz
-			soxr_oneshot(m_sample_rate, HACKRF_SAMPLE, 1,
-				audio_buf, m_sample_count, NULL,
-				new_audio_sample, out_count, NULL,
-				NULL, NULL, NULL);
+
+			soxr_process(soxr, audio_buf, m_sample_count, NULL, new_audio_buf, out_count, NULL);
 
 			//AM mode
 			if (mode == 2) {
 				for (uint32_t i = 0; i < out_count; i++) {
-					double	audio_amp = new_audio_sample[i] * gain;
+					double	audio_amp = new_audio_buf[i] * gain;
 
 					if (fabs(audio_amp) > 1.0) {
 						audio_amp = (audio_amp > 0.0) ? 1.0 : -1.0;
@@ -239,7 +243,7 @@ public:
 
 				for (uint32_t i = 0; i < out_count; i++) {
 
-					double	audio_amp = new_audio_sample[i] * gain;
+					double	audio_amp = new_audio_buf[i] * gain;
 
 					if (fabs(audio_amp) > 1.0) {
 						audio_amp = (audio_amp > 0.0) ? 1.0 : -1.0;
@@ -259,6 +263,7 @@ public:
 				for (uint32_t i = 0; i < (out_count * 2); i += BUF_LEN) {
 
 					work(IQ_buf + i, (remaining > BUF_LEN) ? BUF_LEN : remaining);
+
 					remaining -= BUF_LEN;
 				}
 
@@ -331,8 +336,9 @@ public:
 	}
 
 private:
-	HANDLE m_hMutex;
 
+	std::mutex m_mutex;
+	soxr_t soxr = NULL;
 	hackrf_device * _dev;
 	int ret;
 	uint64_t freq;
@@ -346,8 +352,6 @@ private:
 	uint32_t nch;
 	uint32_t ch_mask;
 
-	BOOL debug = true;;
-
 	config conf;
 	int8_t ** _buf;
 	int count;
@@ -358,9 +362,9 @@ private:
 
 	float * audio_buf = NULL;
 	float * IQ_buf = NULL;
-	float * new_audio_sample = NULL;
-	double fm_phase= NULL;
-	double fm_deviation= NULL;
+	float * new_audio_buf = NULL;
+	double fm_phase = NULL;
+	double fm_deviation = NULL;
 };
 
 int _hackrf_tx_callback(hackrf_transfer *transfer) {
