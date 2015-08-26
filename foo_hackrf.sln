@@ -15,8 +15,6 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "foobar2000_SDK", "foo_hackr
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "foobar2000_component_client", "foo_hackrf\SDK\foobar2000\foobar2000_component_client\foobar2000_component_client.vcxproj", "{71AD2674-065B-48F5-B8B0-E1F9D3892081}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "libsoxr", "foo_hackrf\SDK\soxr-0.1.1-Source\msvc\libsoxr.vcxproj", "{AF9AD75C-4785-4432-BAC3-ADAB1E7F1192}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -73,12 +71,6 @@ Global
 		{71AD2674-065B-48F5-B8B0-E1F9D3892081}.Release|x64.Build.0 = Release|x64
 		{71AD2674-065B-48F5-B8B0-E1F9D3892081}.Release|x86.ActiveCfg = Release|Win32
 		{71AD2674-065B-48F5-B8B0-E1F9D3892081}.Release|x86.Build.0 = Release|Win32
-		{AF9AD75C-4785-4432-BAC3-ADAB1E7F1192}.Debug|x64.ActiveCfg = Debug|Win32
-		{AF9AD75C-4785-4432-BAC3-ADAB1E7F1192}.Debug|x86.ActiveCfg = Debug|Win32
-		{AF9AD75C-4785-4432-BAC3-ADAB1E7F1192}.Debug|x86.Build.0 = Debug|Win32
-		{AF9AD75C-4785-4432-BAC3-ADAB1E7F1192}.Release|x64.ActiveCfg = Release|Win32
-		{AF9AD75C-4785-4432-BAC3-ADAB1E7F1192}.Release|x86.ActiveCfg = Release|Win32
-		{AF9AD75C-4785-4432-BAC3-ADAB1E7F1192}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

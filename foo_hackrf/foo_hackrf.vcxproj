@@ -34,7 +34,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v140</PlatformToolset>
+    <PlatformToolset>v140_xp</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -178,9 +178,6 @@
     </ProjectReference>
     <ProjectReference Include="SDK\pfc\pfc.vcxproj">
       <Project>{ebfffb4e-261d-44d3-b89c-957b31a0bf9c}</Project>
-    </ProjectReference>
-    <ProjectReference Include="SDK\soxr-0.1.1-Source\msvc\libsoxr.vcxproj">
-      <Project>{af9ad75c-4785-4432-bac3-adab1e7f1192}</Project>
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>

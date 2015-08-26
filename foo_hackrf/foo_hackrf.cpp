@@ -1,8 +1,6 @@
 #include "stdafx.h"
 #include "resource.h"
 #include "hackrf.h"
-
-#include "soxr.h" //http://sourceforge.net/projects/soxr/
 #include <stdlib.h>
 #include <math.h>
 #include <stdio.h>
@@ -17,7 +15,7 @@
 
 DECLARE_COMPONENT_VERSION(
 "HackRF Transmitter",
-"0.0.4",
+"0.0.6",
 "Source Code:https://github.com/jocover/foo_hackrf \n"
 "DLL:https://github.com/jocover/foo_hackrf/blob/master/Release/foo_hackrf.dll \n");
 
@@ -68,6 +66,40 @@ public:
 		return 0;
 	}
 
+	void interpolation(float * in_buf, uint32_t in_samples,float * out_buf, uint32_t out_samples,float last_in_samples[4]) {
+		uint32_t i;		/* Input buffer index + 1. */
+		uint32_t j = 0;	/* Output buffer index. */
+		float pos;		/* Position relative to the input buffer
+						* + 1.0. */
+
+						/* We always "stay one sample behind", so what would be our first sample
+						* should be the last one wrote by the previous call. */
+		pos = (float)in_samples / (float)out_samples;
+		while (pos < 1.0)
+		{
+			out_buf[j] = last_in_samples[3]+ (in_buf[0] - last_in_samples[3]) * pos;
+			j++;
+			pos = (float)(j + 1)* (float)in_samples / (float)out_samples;
+		}
+
+		/* Interpolation cycle. */
+		i =(uint32_t) pos;
+		while (j < (out_samples - 1))
+		{
+			
+			out_buf[j] = in_buf[i - 1]+ (in_buf[i] - in_buf[i - 1]) * (pos - (float)i);
+			j++;
+			pos = (float)(j + 1)* (float)in_samples / (float)out_samples;
+			i = (uint32_t)pos;
+		}
+
+		/* The last sample is always the same in input and output buffers. */
+		out_buf[j] = in_buf[in_samples - 1];
+
+		/* Copy last samples to last_in_samples (reusing i and j). */
+		for (i = in_samples - 4, j = 0; j < 4; i++, j++)
+			last_in_samples[j] = in_buf[i];	
+	}
 
 	void work(float *input_items, uint32_t len) {
 
@@ -161,8 +193,6 @@ public:
 			free(_buf);
 		}
 
-		soxr_delete(soxr);
-
 		delete IQ_buf;
 		delete new_audio_buf;
 		delete audio_buf;
@@ -201,11 +231,6 @@ public:
 			IQ_buf = new float[out_count * 2]();
 		}
 
-		if (soxr == NULL) {
-			soxr_quality_spec_t q_spec = soxr_quality_spec(SOXR_HQ, 0);
-			soxr_runtime_spec_t r_spec = soxr_runtime_spec(0);
-			soxr = soxr_create(m_sample_rate, HACKRF_SAMPLE, 1, NULL, NULL, &q_spec, &r_spec);
-		}
 
 		if (nch == 1 && ch_mask == audio_chunk::channel_config_mono) {
 			for (uint32_t i = 0; i < m_sample_count; i++) {
@@ -223,7 +248,7 @@ public:
 
 		if (running) {
 
-			soxr_process(soxr, audio_buf, m_sample_count, NULL, new_audio_buf, out_count, NULL);
+			interpolation(audio_buf, m_sample_count, new_audio_buf, out_count, last_in_samples);
 
 			//AM mode
 			if (mode == 2) {
@@ -338,7 +363,6 @@ public:
 private:
 
 	std::mutex m_mutex;
-	soxr_t soxr = NULL;
 	hackrf_device * _dev;
 	int ret;
 	uint64_t freq;
@@ -365,6 +389,7 @@ private:
 	float * new_audio_buf = NULL;
 	double fm_phase = NULL;
 	double fm_deviation = NULL;
+	float last_in_samples[4] = { 0.0, 0.0, 0.0, 0.0 };
 };
 
 int _hackrf_tx_callback(hackrf_transfer *transfer) {
