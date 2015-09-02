@@ -6,16 +6,16 @@
 #include <stdio.h>
 #include <mutex> 
 
-#define HACKRF_SAMPLE 400000  //0.4Mhz
+
 #define BUF_LEN 262144         //hackrf tx buf
-#define BUF_NUM  15
+#define BUF_NUM  31
 #define BYTES_PER_SAMPLE  2
 #define M_PI 3.14159265358979323846
 
 
 DECLARE_COMPONENT_VERSION(
 "HackRF Transmitter",
-"0.0.6",
+"0.0.7",
 "Source Code:https://github.com/jocover/foo_hackrf \n"
 "DLL:https://github.com/jocover/foo_hackrf/blob/master/Release/foo_hackrf.dll \n");
 
@@ -66,7 +66,7 @@ public:
 		return 0;
 	}
 
-	void interpolation(float * in_buf, uint32_t in_samples,float * out_buf, uint32_t out_samples,float last_in_samples[4]) {
+	void interpolation(float * in_buf, uint32_t in_samples, float * out_buf, uint32_t out_samples, float last_in_samples[4]) {
 		uint32_t i;		/* Input buffer index + 1. */
 		uint32_t j = 0;	/* Output buffer index. */
 		float pos;		/* Position relative to the input buffer
@@ -77,17 +77,17 @@ public:
 		pos = (float)in_samples / (float)out_samples;
 		while (pos < 1.0)
 		{
-			out_buf[j] = last_in_samples[3]+ (in_buf[0] - last_in_samples[3]) * pos;
+			out_buf[j] = last_in_samples[3] + (in_buf[0] - last_in_samples[3]) * pos;
 			j++;
 			pos = (float)(j + 1)* (float)in_samples / (float)out_samples;
 		}
 
 		/* Interpolation cycle. */
-		i =(uint32_t) pos;
+		i = (uint32_t)pos;
 		while (j < (out_samples - 1))
 		{
-			
-			out_buf[j] = in_buf[i - 1]+ (in_buf[i] - in_buf[i - 1]) * (pos - (float)i);
+
+			out_buf[j] = in_buf[i - 1] + (in_buf[i] - in_buf[i - 1]) * (pos - (float)i);
 			j++;
 			pos = (float)(j + 1)* (float)in_samples / (float)out_samples;
 			i = (uint32_t)pos;
@@ -98,36 +98,65 @@ public:
 
 		/* Copy last samples to last_in_samples (reusing i and j). */
 		for (i = in_samples - 4, j = 0; j < 4; i++, j++)
-			last_in_samples[j] = in_buf[i];	
+			last_in_samples[j] = in_buf[i];
+	}
+
+	void modulation(float * input, float * output, uint32_t mode) {
+
+		if (mode == 0) {
+			fm_deviation = 2.0 * M_PI * 75.0e3 / hackrf_sample; // 75 kHz max deviation WBFM
+		}
+		else if (mode == 1)
+		{
+			fm_deviation = 2.0 * M_PI * 5.0e3 / hackrf_sample; // 5 kHz max deviation NBFM
+		}
+
+		//AM mode
+		if (mode == 2) {
+			for (uint32_t i = 0; i < BUF_LEN; i++) {
+				double	audio_amp = input[i] * gain;
+
+				if (fabs(audio_amp) > 1.0) {
+					audio_amp = (audio_amp > 0.0) ? 1.0 : -1.0;
+				}
+
+				IQ_buf[i * BYTES_PER_SAMPLE] = (float)audio_amp;
+				IQ_buf[i * BYTES_PER_SAMPLE + 1] = 0;
+			}
+		}
+		//FM mode
+		else {
+
+			for (uint32_t i = 0; i < BUF_LEN; i++) {
+
+				double	audio_amp = input[i] * gain;
+
+				if (fabs(audio_amp) > 1.0) {
+					audio_amp = (audio_amp > 0.0) ? 1.0 : -1.0;
+				}
+				fm_phase += fm_deviation * audio_amp;
+				while (fm_phase > (float)(M_PI))
+					fm_phase -= (float)(2.0 * M_PI);
+				while (fm_phase < (float)(-M_PI))
+					fm_phase += (float)(2.0 * M_PI);
+
+				output[i * BYTES_PER_SAMPLE] = (float)sin(fm_phase);
+				output[i * BYTES_PER_SAMPLE + 1] = (float)cos(fm_phase);
+			}
+		}
+
+
 	}
 
 	void work(float *input_items, uint32_t len) {
 
 		m_mutex.lock();
-
-		int8_t * buf = (int8_t *)_buf[head] + offset;
-		if (len < samp_avail) {
-			for (uint32_t i = 0; i < len; i++) {
-				buf[i] = (int8_t)(input_items[i] * 127.0);
-			}
-			offset += len;
-			samp_avail -= len;
+		int8_t * buf = (int8_t *)_buf[head];
+		for (uint32_t i = 0; i < BUF_LEN; i++) {
+			buf[i] = (int8_t)(input_items[i] * 127.0);
 		}
-		else {
-			for (uint32_t i = 0; i < samp_avail; i++) {
-				buf[i] = (int8_t)(input_items[i] * 127.0);
-			}
-			head = (head + 1) % BUF_NUM;
-			count++;
-
-			buf = (int8_t*)_buf[head];
-			int remaining = len - samp_avail;
-			for (int32_t i = 0; i < remaining; i++) {
-				buf[i] = (int8_t)(input_items[i] * 127.0);
-			}
-			offset = remaining;
-			samp_avail = BUF_LEN - remaining;
-		}
+		head = (head + 1) % BUF_NUM;
+		count++;
 		m_mutex.unlock();
 
 	}
@@ -140,16 +169,10 @@ public:
 		tx_vga = conf.tx_vga;
 		enableamp = conf.enableamp;
 
-		if (mode == 0) {
-			fm_deviation = 2.0 * M_PI * 75.0e3 / HACKRF_SAMPLE; // 75 kHz max deviation WBFM
-		}
-		else if (mode == 1)
-		{
-			fm_deviation = 2.0 * M_PI * 5.0e3 / HACKRF_SAMPLE; // 5 kHz max deviation NBFM
-		}
 
-		count = tail = head = offset = 0;
-		samp_avail = BUF_LEN;
+
+		count = tail = head = 0;
+
 		_buf = (int8_t **)malloc(BUF_NUM * sizeof(int8_t *));
 		if (_buf) {
 			for (unsigned int i = 0; i < BUF_NUM; ++i) {
@@ -165,7 +188,7 @@ public:
 			hackrf_close(_dev);
 		}
 		else {
-			hackrf_set_sample_rate(_dev, HACKRF_SAMPLE);
+			hackrf_set_sample_rate(_dev, hackrf_sample);
 			hackrf_set_baseband_filter_bandwidth(_dev, 1750000);
 			hackrf_set_freq(_dev, freq);
 			hackrf_set_txvga_gain(_dev, tx_vga);
@@ -216,19 +239,17 @@ public:
 		ch_mask = chunk->get_channel_config();
 		m_sample_rate = chunk->get_sample_rate();
 		m_sample_count = chunk->get_sample_count();
-		uint32_t out_count = (uint32_t)m_sample_count*HACKRF_SAMPLE / m_sample_rate;
+		hackrf_sample = m_sample_rate*1.0 / m_sample_count*BUF_LEN;
+
+		//	uint32_t out_count = (uint32_t)m_sample_count*HACKRF_SAMPLE / m_sample_rate;
 		audio_sample * source_audio_buf = chunk->get_data();
 
-		if (audio_buf == NULL) {
+
+		if (audio_buf == NULL || new_audio_buf == NULL || IQ_buf == NULL) {
+			hackrf_set_sample_rate(_dev, hackrf_sample);
 			audio_buf = new float[m_sample_count]();
-		}
-
-		if (new_audio_buf == NULL) {
-			new_audio_buf = new float[out_count]();
-		}
-
-		if (IQ_buf == NULL) {
-			IQ_buf = new float[out_count * 2]();
+			new_audio_buf = new float[BUF_LEN]();
+			IQ_buf = new float[BUF_LEN * 2]();
 		}
 
 
@@ -248,55 +269,18 @@ public:
 
 		if (running) {
 
-			interpolation(audio_buf, m_sample_count, new_audio_buf, out_count, last_in_samples);
+			interpolation(audio_buf, m_sample_count, new_audio_buf, BUF_LEN, last_in_samples);
+
+			modulation(new_audio_buf, IQ_buf, mode);
+
+			for (uint32_t i = 0; i < (BUF_LEN * BYTES_PER_SAMPLE); i += BUF_LEN) {
+
+				work(IQ_buf + i, BUF_LEN);
+			}
 
 			//AM mode
-			if (mode == 2) {
-				for (uint32_t i = 0; i < out_count; i++) {
-					double	audio_amp = new_audio_buf[i] * gain;
 
-					if (fabs(audio_amp) > 1.0) {
-						audio_amp = (audio_amp > 0.0) ? 1.0 : -1.0;
-					}
 
-					IQ_buf[i * BYTES_PER_SAMPLE] = (float)audio_amp;
-					IQ_buf[i * BYTES_PER_SAMPLE + 1] = 0;
-				}
-			}
-			//FM mode
-			else {
-
-				for (uint32_t i = 0; i < out_count; i++) {
-
-					double	audio_amp = new_audio_buf[i] * gain;
-
-					if (fabs(audio_amp) > 1.0) {
-						audio_amp = (audio_amp > 0.0) ? 1.0 : -1.0;
-					}
-					fm_phase += fm_deviation * audio_amp;
-					while (fm_phase > (float)(M_PI))
-						fm_phase -= (float)(2.0 * M_PI);
-					while (fm_phase < (float)(-M_PI))
-						fm_phase += (float)(2.0 * M_PI);
-
-					IQ_buf[i * BYTES_PER_SAMPLE] = (float)sin(fm_phase);
-					IQ_buf[i * BYTES_PER_SAMPLE + 1] = (float)cos(fm_phase);
-				}
-			}
-			if (out_count > BUF_LEN) {
-				int remaining = out_count * 2;
-				for (uint32_t i = 0; i < (out_count * 2); i += BUF_LEN) {
-
-					work(IQ_buf + i, (remaining > BUF_LEN) ? BUF_LEN : remaining);
-
-					remaining -= BUF_LEN;
-				}
-
-			}
-			else {
-
-				work(IQ_buf, out_count * BYTES_PER_SAMPLE);
-			}
 		}
 		// To retrieve the currently processed track, use get_cur_file().
 		// Warning: the track is not always known - it's up to the calling component to provide this data and in some situations we'll be working with data that doesn't originate from an audio file.
@@ -381,9 +365,7 @@ private:
 	int count;
 	int tail;
 	int head;
-	int offset;
-	uint32_t samp_avail;
-
+	uint32_t hackrf_sample = 2000000;
 	float * audio_buf = NULL;
 	float * IQ_buf = NULL;
 	float * new_audio_buf = NULL;
