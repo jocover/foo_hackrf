@@ -8,14 +8,14 @@
 
 
 #define BUF_LEN 262144         //hackrf tx buf
-#define BUF_NUM  31
+#define BUF_NUM  15
 #define BYTES_PER_SAMPLE  2
 #define M_PI 3.14159265358979323846
 
 
 DECLARE_COMPONENT_VERSION(
 "HackRF Transmitter",
-"0.0.7",
+"0.0.8",
 "Source Code:https://github.com/jocover/foo_hackrf \n"
 "DLL:https://github.com/jocover/foo_hackrf/blob/master/Release/foo_hackrf.dll \n");
 
@@ -207,6 +207,7 @@ public:
 			hackrf_stop_tx(_dev);
 			hackrf_close(_dev);
 			_dev = NULL;
+
 		}
 		if (_buf) {
 			for (unsigned int i = 0; i < BUF_NUM; ++i) {
@@ -215,7 +216,7 @@ public:
 			}
 			free(_buf);
 		}
-
+		
 		delete IQ_buf;
 		delete new_audio_buf;
 		delete audio_buf;
@@ -241,33 +242,35 @@ public:
 		m_sample_count = chunk->get_sample_count();
 		hackrf_sample = m_sample_rate*1.0 / m_sample_count*BUF_LEN;
 
-		//	uint32_t out_count = (uint32_t)m_sample_count*HACKRF_SAMPLE / m_sample_rate;
 		audio_sample * source_audio_buf = chunk->get_data();
 
-
-		if (audio_buf == NULL || new_audio_buf == NULL || IQ_buf == NULL) {
-			hackrf_set_sample_rate(_dev, hackrf_sample);
-			audio_buf = new float[m_sample_count]();
-			new_audio_buf = new float[BUF_LEN]();
-			IQ_buf = new float[BUF_LEN * 2]();
-		}
-
-
-		if (nch == 1 && ch_mask == audio_chunk::channel_config_mono) {
-			for (uint32_t i = 0; i < m_sample_count; i++) {
-
-				audio_buf[i] = source_audio_buf[i];
-			}
-		}
-		else if (nch == 2 && ch_mask == audio_chunk::channel_config_stereo) {
-			for (uint32_t i = 0; i < m_sample_count; i++) {
-
-				audio_buf[i] = (source_audio_buf[i * 2] + source_audio_buf[i * 2 + 1]) / (float)2.0;
-			}
-
-		}
-
 		if (running) {
+
+			if (!inited) {
+				hackrf_set_sample_rate(_dev, hackrf_sample);
+				audio_buf = new float[m_sample_count]();
+				new_audio_buf = new float[BUF_LEN]();
+				IQ_buf = new float[BUF_LEN * BYTES_PER_SAMPLE]();
+				inited = true;
+			}
+
+
+			if (nch == 1 && ch_mask == audio_chunk::channel_config_mono) {
+				for (uint32_t i = 0; i < m_sample_count; i++) {
+
+					audio_buf[i] = source_audio_buf[i];
+				}
+			}
+			else if (nch == 2 && ch_mask == audio_chunk::channel_config_stereo) {
+				for (uint32_t i = 0; i < m_sample_count; i++) {
+
+					audio_buf[i] = (source_audio_buf[i * 2] + source_audio_buf[i * 2 + 1]) / (float)2.0;
+				}
+
+			}
+
+
+
 
 			interpolation(audio_buf, m_sample_count, new_audio_buf, BUF_LEN, last_in_samples);
 
@@ -347,21 +350,21 @@ public:
 private:
 
 	std::mutex m_mutex;
-	hackrf_device * _dev;
+	hackrf_device * _dev = NULL;
 	int ret;
 	uint64_t freq;
 	float gain;
 	uint32_t mode;
 	uint32_t tx_vga;
 	uint8_t enableamp;
-
+	bool inited = false;
 	uint32_t m_sample_rate;
 	size_t m_sample_count;
 	uint32_t nch;
 	uint32_t ch_mask;
 
 	config conf;
-	int8_t ** _buf;
+	int8_t ** _buf = NULL;
 	int count;
 	int tail;
 	int head;
