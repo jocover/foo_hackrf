@@ -8,7 +8,7 @@
 
 
 #define BUF_LEN 262144         //hackrf tx buf
-#define BUF_NUM  15
+#define BUF_NUM  63
 #define BYTES_PER_SAMPLE  2
 #define M_PI 3.14159265358979323846
 
@@ -247,6 +247,9 @@ public:
 		if (running) {
 
 			if (!inited) {
+				if (hackrf_sample > 20000000) {
+					MessageBox(NULL, L"sample rate too high!", NULL, MB_OK);
+				}
 				hackrf_set_sample_rate(_dev, hackrf_sample);
 				audio_buf = new float[m_sample_count]();
 				new_audio_buf = new float[BUF_LEN]();
