@@ -5,19 +5,19 @@
 #include <math.h>
 #include <stdio.h>
 #include <mutex> 
+#include <vector>
 
 
 #define BUF_LEN 262144         //hackrf tx buf
-#define BUF_NUM  63
-#define BYTES_PER_SAMPLE  2
+#define BUF_NUM  16
 #define M_PI 3.14159265358979323846
-
+#define SAMPLERATE 2000000
 
 DECLARE_COMPONENT_VERSION(
 "HackRF Transmitter",
-"0.0.8",
+"0.1.0",
 "Source Code:https://github.com/jocover/foo_hackrf \n"
-"DLL:https://github.com/jocover/foo_hackrf/blob/master/Release/foo_hackrf.dll \n");
+"DLL:https://www.jiangwei.org/download/foo_hackrf.zip \n");
 
 
 // This will prevent users from renaming your component around (important for proper troubleshooter behaviors) or loading multiple instances of it.
@@ -25,7 +25,7 @@ VALIDATE_COMPONENT_FILENAME("foo_hackrf.dll");
 
 
 struct config {
-	double freq;
+	float freq;
 	uint32_t gain;
 	uint32_t mode;
 	uint32_t tx_vga;
@@ -51,7 +51,7 @@ public:
 
 	int hackrf_tx_callback(int8_t *buffer, uint32_t length) {
 
-		m_mutex.lock();
+		std::unique_lock<std::mutex> lock(mutex);
 
 		if (count == 0) {
 			memset(buffer, 0, length);
@@ -61,122 +61,27 @@ public:
 			tail = (tail + 1) % BUF_NUM;
 			count--;
 		}
-		m_mutex.unlock();
+
+		cond.notify_one();
 
 		return 0;
 	}
 
-	void interpolation(float * in_buf, uint32_t in_samples, float * out_buf, uint32_t out_samples, float last_in_samples[4]) {
-		uint32_t i;		/* Input buffer index + 1. */
-		uint32_t j = 0;	/* Output buffer index. */
-		float pos;		/* Position relative to the input buffer
-						* + 1.0. */
-
-						/* We always "stay one sample behind", so what would be our first sample
-						* should be the last one wrote by the previous call. */
-		pos = (float)in_samples / (float)out_samples;
-		while (pos < 1.0)
-		{
-			out_buf[j] = last_in_samples[3] + (in_buf[0] - last_in_samples[3]) * pos;
-			j++;
-			pos = (float)(j + 1)* (float)in_samples / (float)out_samples;
-		}
-
-		/* Interpolation cycle. */
-		i = (uint32_t)pos;
-		while (j < (out_samples - 1))
-		{
-
-			out_buf[j] = in_buf[i - 1] + (in_buf[i] - in_buf[i - 1]) * (pos - (float)i);
-			j++;
-			pos = (float)(j + 1)* (float)in_samples / (float)out_samples;
-			i = (uint32_t)pos;
-		}
-
-		/* The last sample is always the same in input and output buffers. */
-		out_buf[j] = in_buf[in_samples - 1];
-
-		/* Copy last samples to last_in_samples (reusing i and j). */
-		for (i = in_samples - 4, j = 0; j < 4; i++, j++)
-			last_in_samples[j] = in_buf[i];
-	}
-
-	void modulation(float * input, float * output, uint32_t mode) {
-
-		if (mode == 0) {
-			fm_deviation = 2.0 * M_PI * 75.0e3 / hackrf_sample; // 75 kHz max deviation WBFM
-		}
-		else if (mode == 1)
-		{
-			fm_deviation = 2.0 * M_PI * 5.0e3 / hackrf_sample; // 5 kHz max deviation NBFM
-		}
-
-		//AM mode
-		if (mode == 2) {
-			for (uint32_t i = 0; i < BUF_LEN; i++) {
-				double	audio_amp = input[i] * gain;
-
-				if (fabs(audio_amp) > 1.0) {
-					audio_amp = (audio_amp > 0.0) ? 1.0 : -1.0;
-				}
-
-				IQ_buf[i * BYTES_PER_SAMPLE] = (float)audio_amp;
-				IQ_buf[i * BYTES_PER_SAMPLE + 1] = 0;
-			}
-		}
-		//FM mode
-		else {
-
-			for (uint32_t i = 0; i < BUF_LEN; i++) {
-
-				double	audio_amp = input[i] * gain;
-
-				if (fabs(audio_amp) > 1.0) {
-					audio_amp = (audio_amp > 0.0) ? 1.0 : -1.0;
-				}
-				fm_phase += fm_deviation * audio_amp;
-				while (fm_phase > (float)(M_PI))
-					fm_phase -= (float)(2.0 * M_PI);
-				while (fm_phase < (float)(-M_PI))
-					fm_phase += (float)(2.0 * M_PI);
-
-				output[i * BYTES_PER_SAMPLE] = (float)sin(fm_phase);
-				output[i * BYTES_PER_SAMPLE + 1] = (float)cos(fm_phase);
-			}
-		}
-
-
-	}
-
-	void work(float *input_items, uint32_t len) {
-
-		m_mutex.lock();
-		int8_t * buf = (int8_t *)_buf[head];
-		for (uint32_t i = 0; i < BUF_LEN; i++) {
-			buf[i] = (int8_t)(input_items[i] * 127.0);
-		}
-		head = (head + 1) % BUF_NUM;
-		count++;
-		m_mutex.unlock();
-
-	}
 
 	dsp_sample(dsp_preset const & in) : conf(default) {
 		parse_preset(conf, in);
 		freq = uint64_t(conf.freq * 1000000);
-		gain = (float)(conf.gain / 100.0);
+		dsp_gain = (float)(conf.gain / 100.0);
 		mode = conf.mode;
 		tx_vga = conf.tx_vga;
 		enableamp = conf.enableamp;
 
-
-
-		count = tail = head = 0;
-
+		count = tail = head = offset = 0;
+		samp_avail = BUF_LEN / 2;
 		_buf = (int8_t **)malloc(BUF_NUM * sizeof(int8_t *));
 		if (_buf) {
 			for (unsigned int i = 0; i < BUF_NUM; ++i) {
-				_buf[i] = (int8_t *)malloc(BUF_LEN*sizeof(int8_t));
+				_buf[i] = (int8_t *)malloc(BUF_LEN * sizeof(int8_t));
 			}
 		}
 		// hackrf init  //
@@ -184,19 +89,21 @@ public:
 		hackrf_init();
 		ret = hackrf_open(&_dev);
 		if (ret != HACKRF_SUCCESS) {
-			MessageBox(NULL, L"Failed to open HackRF device", NULL, MB_OK);
+
 			hackrf_close(_dev);
+			throw std::runtime_error("Failed to open HackRF device");
 		}
 		else {
-			hackrf_set_sample_rate(_dev, hackrf_sample);
-			hackrf_set_baseband_filter_bandwidth(_dev, 1750000);
+			hackrf_set_sample_rate(_dev, SAMPLERATE);
+			hackrf_set_baseband_filter_bandwidth(_dev, SAMPLERATE*0.75);
 			hackrf_set_freq(_dev, freq);
 			hackrf_set_txvga_gain(_dev, tx_vga);
+			hackrf_set_lna_gain(_dev, 24);
 			hackrf_set_amp_enable(_dev, enableamp);
 			ret = hackrf_start_tx(_dev, _hackrf_tx_callback, (void *)this);
 			if (ret != HACKRF_SUCCESS) {
-				MessageBox(NULL, L"Failed to start TX streaming", NULL, MB_OK);
 				hackrf_close(_dev);
+				throw std::runtime_error("Failed to start TX streaming");
 			}
 			running = true;
 		}
@@ -206,7 +113,7 @@ public:
 		if (_dev) {
 			hackrf_stop_tx(_dev);
 			hackrf_close(_dev);
-			_dev = NULL;
+			_dev = nullptr;
 
 		}
 		if (_buf) {
@@ -216,10 +123,7 @@ public:
 			}
 			free(_buf);
 		}
-		
-		delete IQ_buf;
-		delete new_audio_buf;
-		delete audio_buf;
+
 		running = false;
 	}
 
@@ -236,58 +140,41 @@ public:
 	bool on_chunk(audio_chunk * chunk, abort_callback &) {
 		// Perform any operations on the chunk here.
 		// The most simple DSPs can just alter the chunk in-place here and skip the following functions.
-		nch = chunk->get_channels();
-		ch_mask = chunk->get_channel_config();
-		m_sample_rate = chunk->get_sample_rate();
-		m_sample_count = chunk->get_sample_count();
-		hackrf_sample = m_sample_rate*1.0 / m_sample_count*BUF_LEN;
-
 		audio_sample * source_audio_buf = chunk->get_data();
+		sample_count = chunk->get_sample_count();
 
-		if (running) {
+		integerfactor = SAMPLERATE*1.0 / chunk->get_sample_rate();
 
-			if (!inited) {
-				if (hackrf_sample > 20000000) {
-					MessageBox(NULL, L"sample rate too high!", NULL, MB_OK);
-				}
-				hackrf_set_sample_rate(_dev, hackrf_sample);
-				audio_buf = new float[m_sample_count]();
-				new_audio_buf = new float[BUF_LEN]();
-				IQ_buf = new float[BUF_LEN * BYTES_PER_SAMPLE]();
-				inited = true;
+		if (input_audio_buf.size() != sample_count)
+			input_audio_buf.resize(sample_count);
+
+		if (output_audio_buf.size() != size_t(sample_count*integerfactor)) {
+			output_audio_buf.resize(size_t(sample_count*integerfactor));
+			iq_buf.resize(size_t(sample_count*integerfactor) * 2);
+		}
+
+		if (chunk->get_channels() == 1 && chunk->get_channel_config() == audio_chunk::channel_config_mono) {
+			for (uint32_t i = 0; i < sample_count; i++) {
+
+				input_audio_buf[i] = source_audio_buf[i];
 			}
+		}
+		else if (chunk->get_channels() == 2 && chunk->get_channel_config() == audio_chunk::channel_config_stereo) {
+			for (uint32_t i = 0; i < sample_count; i++) {
 
-
-			if (nch == 1 && ch_mask == audio_chunk::channel_config_mono) {
-				for (uint32_t i = 0; i < m_sample_count; i++) {
-
-					audio_buf[i] = source_audio_buf[i];
-				}
+				input_audio_buf[i] = (source_audio_buf[i * 2] + source_audio_buf[i * 2 + 1]) / (float)2.0;
 			}
-			else if (nch == 2 && ch_mask == audio_chunk::channel_config_stereo) {
-				for (uint32_t i = 0; i < m_sample_count; i++) {
-
-					audio_buf[i] = (source_audio_buf[i * 2] + source_audio_buf[i * 2 + 1]) / (float)2.0;
-				}
-
-			}
-
-
-
-
-			interpolation(audio_buf, m_sample_count, new_audio_buf, BUF_LEN, last_in_samples);
-
-			modulation(new_audio_buf, IQ_buf, mode);
-
-			for (uint32_t i = 0; i < (BUF_LEN * BYTES_PER_SAMPLE); i += BUF_LEN) {
-
-				work(IQ_buf + i, BUF_LEN);
-			}
-
-			//AM mode
-
 
 		}
+
+
+		interpolation(input_audio_buf.data(), sample_count, output_audio_buf.data(), size_t(sample_count*integerfactor), last_in_samples);
+
+		modulation(output_audio_buf.data(), size_t(sample_count*integerfactor), iq_buf.data(), mode);
+
+		send(iq_buf.data(), size_t(sample_count*integerfactor));
+
+
 		// To retrieve the currently processed track, use get_cur_file().
 		// Warning: the track is not always known - it's up to the calling component to provide this data and in some situations we'll be working with data that doesn't originate from an audio file.
 		// If you rely on get_cur_file(), you should change need_track_change_mark() to return true to get accurate information when advancing between tracks.
@@ -352,31 +239,157 @@ public:
 
 private:
 
-	std::mutex m_mutex;
-	hackrf_device * _dev = NULL;
+	void interpolation(float * in_buf, uint32_t in_samples, float * out_buf, uint32_t out_samples, float last_in_samples[4]) {
+		uint32_t i;		/* Input buffer index + 1. */
+		uint32_t j = 0;	/* Output buffer index. */
+		float pos;		/* Position relative to the input buffer
+						* + 1.0. */
+
+						/* We always "stay one sample behind", so what would be our first sample
+						* should be the last one wrote by the previous call. */
+		pos = (float)in_samples / (float)out_samples;
+		while (pos < 1.0)
+		{
+			out_buf[j] = last_in_samples[3] + (in_buf[0] - last_in_samples[3]) * pos;
+			j++;
+			pos = (float)(j + 1)* (float)in_samples / (float)out_samples;
+		}
+
+		/* Interpolation cycle. */
+		i = (uint32_t)pos;
+		while (j < (out_samples - 1))
+		{
+
+			out_buf[j] = in_buf[i - 1] + (in_buf[i] - in_buf[i - 1]) * (pos - (float)i);
+			j++;
+			pos = (float)(j + 1)* (float)in_samples / (float)out_samples;
+			i = (uint32_t)pos;
+		}
+
+		/* The last sample is always the same in input and output buffers. */
+		out_buf[j] = in_buf[in_samples - 1];
+
+		/* Copy last samples to last_in_samples (reusing i and j). */
+		for (i = in_samples - 4, j = 0; j < 4; i++, j++)
+			last_in_samples[j] = in_buf[i];
+	}
+
+	void modulation(float * input, uint32_t input_len, float * output, uint32_t mode) {
+
+		if (mode == 0) {
+			fm_deviation = 2.0 * M_PI * 75.0e3 / SAMPLERATE; // 75 kHz max deviation WBFM
+		}
+		else if (mode == 1)
+		{
+			fm_deviation = 2.0 * M_PI * 5.0e3 / SAMPLERATE; // 5 kHz max deviation NBFM
+		}
+
+		//AM mode
+		if (mode == 2) {
+			for (uint32_t i = 0; i < input_len; i++) {
+				double	audio_amp = input[i] * dsp_gain;
+
+				if (fabs(audio_amp) > 1.0) {
+					audio_amp = (audio_amp > 0.0) ? 1.0 : -1.0;
+				}
+
+				output[i * 2] = 0;
+				output[i * 2 + 1] = (float)audio_amp;
+			}
+		}
+		//FM mode
+		else {
+
+			for (uint32_t i = 0; i < input_len; i++) {
+
+				double	audio_amp = input[i] * dsp_gain;
+
+				if (fabs(audio_amp) > 1.0) {
+					audio_amp = (audio_amp > 0.0) ? 1.0 : -1.0;
+				}
+				fm_phase += fm_deviation * audio_amp;
+				while (fm_phase > (float)(M_PI))
+					fm_phase -= (float)(2.0 * M_PI);
+				while (fm_phase < (float)(-M_PI))
+					fm_phase += (float)(2.0 * M_PI);
+
+				output[i * 2] = (float)sin(fm_phase);
+				output[i * 2 + 1] = (float)cos(fm_phase);
+			}
+		}
+
+
+	}
+
+	void send(float* input_items, size_t len) {
+
+		{
+			std::unique_lock <std::mutex> lock(mutex);
+			while (count == BUF_NUM)
+			{
+				cond.wait_for(lock, std::chrono::microseconds(1000));
+			}
+
+		}
+		int8_t * buf = (int8_t *)_buf[head] + offset * 2;
+
+		if (len <= samp_avail) {
+			for (uint32_t i = 0; i < len; i++) {
+				buf[i * 2] = (int8_t)(input_items[i * 2] * 127.0);
+				buf[i * 2 + 1] = (int8_t)(input_items[i * 2 + 1] * 127.0);
+			}
+			offset += len;
+			samp_avail -= len;
+		}
+		else {
+			for (uint32_t i = 0; i < samp_avail; i++) {
+				buf[i * 2] = (int8_t)(input_items[i * 2] * 127.0);
+				buf[i * 2 + 1] = (int8_t)(input_items[i * 2 + 1] * 127.0);
+			}
+			{
+				std::unique_lock <std::mutex> lock(mutex);
+				head = (head + 1) % BUF_NUM;
+				count++;
+			}
+			buf = (int8_t*)_buf[head];
+			int remaining = len - samp_avail;
+			for (int32_t i = 0; i < remaining; i++) {
+				buf[i * 2] = (int8_t)(input_items[i * 2 + samp_avail * 2] * 127.0);
+				buf[i * 2 + 1] = (int8_t)(input_items[i * 2 + 1 + samp_avail * 2] * 127.0);
+			}
+			offset = remaining;
+			samp_avail = BUF_LEN / 2 - remaining;
+		}
+
+
+	}
+
+	std::vector<float> input_audio_buf;
+	std::vector<float> output_audio_buf;
+	std::vector<float> iq_buf;
+	std::condition_variable cond;
+	std::mutex mutex;
+	hackrf_device * _dev = nullptr;
 	int ret;
 	uint64_t freq;
-	float gain;
+	float dsp_gain;
 	uint32_t mode;
 	uint32_t tx_vga;
 	uint8_t enableamp;
-	bool inited = false;
-	uint32_t m_sample_rate;
-	size_t m_sample_count;
-	uint32_t nch;
-	uint32_t ch_mask;
+
+	double integerfactor;
+	size_t sample_count;
 
 	config conf;
 	int8_t ** _buf = NULL;
 	int count;
 	int tail;
 	int head;
-	uint32_t hackrf_sample = 2000000;
-	float * audio_buf = NULL;
-	float * IQ_buf = NULL;
-	float * new_audio_buf = NULL;
-	double fm_phase = NULL;
-	double fm_deviation = NULL;
+	int offset;
+	uint32_t samp_avail;
+
+	double fm_phase;
+	double fm_deviation;
 	float last_in_samples[4] = { 0.0, 0.0, 0.0, 0.0 };
 };
 
@@ -428,8 +441,9 @@ private:
 			m_edit_freq.SetLimitText(7);
 			char freq[20];
 			sprintf_s(freq, "%.2f", _config.freq);
-			pfc::string_formatter msg; msg << freq;
-			::uSetDlgItemText(*this, IDC_EDIT_FREQ, msg);
+			wchar_t wstr[20];
+			std::mbstowcs(wstr, freq, 20);
+			m_edit_freq.SetWindowTextW(wstr);
 
 			m_check_amp.SetCheck(_config.enableamp);
 
@@ -449,8 +463,10 @@ private:
 
 		switch (nID) {
 		case IDOK: {
-			pfc::string freqstr = ::uGetDlgItemText(*this, IDC_EDIT_FREQ);
-			conf.freq = atof(freqstr.c_str());
+			CString str;
+			m_edit_freq.GetWindowTextW(str);
+			conf.freq = static_cast<float>(_wtof(str));
+
 			conf.mode = m_combo_mode.GetCurSel();
 			conf.enableamp = m_check_amp.GetCheck();
 			conf.gain = (uint32_t)m_slider.GetPos();
